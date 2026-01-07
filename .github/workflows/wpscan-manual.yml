@@ -11,7 +11,7 @@ on:
         description: 'Additional WPScan flags (e.g., --stealthy --enumerate vp,vt,u)'
         required: false
         type: string
-        default: '--enumerate vp,vt,u'  # Vulnerable plugins/themes + users
+        default: '--enumerate vp,vt,u'  # Vulnerable plugins, vulnerable themes, users
       output_format:
         description: 'Output format'
         required: false
@@ -24,24 +24,34 @@ on:
         type: boolean
         default: false
       wordlist_url:
-        description: 'Custom password wordlist URL (direct .txt link). Default: 10k common passwords (fast).'
+        description: 'Password wordlist URL (direct .txt link). Default: 10k most common (fast & safe).'
         required: false
         type: string
         default: 'https://raw.githubusercontent.com/danielmiessler/SecLists/master/Passwords/Common-Credentials/10k-most-common.txt'
       brute_force_flags:
-        description: 'Extra brute-force flags (e.g., --threads 10 --usernames admin,user2)'
+        description: 'Extra brute-force flags (e.g., --usernames admin --max-password-tries 100 --password-attack xmlrpc)'
         required: false
         type: string
-        default: '--threads 10'  # Safe multi-threading
+        default: ''
 
 jobs:
   scan:
     runs-on: ubuntu-latest
     steps:
+      - name: Pull latest WPScan Docker image
+        run: docker pull wpscanteam/wpscan:latest
+
+      - name: Download password wordlist (only if brute-force enabled)
+        if: inputs.enable_bruteforce == true
+        run: |
+          curl -L -o /tmp/passwords.txt "${{ inputs.wordlist_url }}"
+          echo "Wordlist downloaded: $(wc -l < /tmp/passwords.txt) passwords"
+
       - name: Run WPScan
         env:
-          WPSCAN_API_TOKEN: ${{ secrets.WPSCAN_API_TOKEN }}
+          WPSCAN_API_TOKEN: ${{ secrets.WPSCAN_API_TOKEN }}  # Add your free token in repo secrets for full vuln details
         run: |
+          # Base command (always included)
           CMD="docker run --rm -v /tmp:/tmp wpscanteam/wpscan:latest \
             --url '${{ inputs.target_url }}' \
             ${{ inputs.extra_flags }} \
@@ -49,19 +59,25 @@ jobs:
             --output /tmp/wpscan-report.${{ inputs.output_format == 'json' && 'json' || 'txt' }} \
             --no-banner"
 
+          # Add API token only if it exists and is not empty
           if [ -n "$WPSCAN_API_TOKEN" ]; then
             CMD="$CMD --api-token '$WPSCAN_API_TOKEN'"
           fi
 
+          # Add brute-force options only if enabled
           if [ "${{ inputs.enable_bruteforce }}" = "true" ]; then
             CMD="$CMD --passwords /tmp/passwords.txt ${{ inputs.brute_force_flags }}"
           fi
 
+          # Show the final command (helpful for debugging)
           echo "Running WPScan command:"
           echo "$CMD"
+
+          # Execute
           eval $CMD
+
       - name: Upload Scan Report
-        if: always()
+        if: always()  # Upload even if scan fails
         uses: actions/upload-artifact@v4
         with:
           name: wpscan-report
