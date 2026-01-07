@@ -38,26 +38,20 @@ jobs:
   scan:
     runs-on: ubuntu-latest
     steps:
-      - name: Pull latest WPScan Docker image
-        run: docker pull wpscanteam/wpscan:latest
-
-      - name: Download password wordlist (if brute-force enabled)
-        if: inputs.enable_bruteforce == true
-        run: |
-          curl -L -o /tmp/passwords.txt "${{ inputs.wordlist_url }}"
-          echo "Wordlist downloaded: $(wc -l < /tmp/passwords.txt) passwords"
-
       - name: Run WPScan
         env:
-          WPSCAN_API_TOKEN: ${{ secrets.WPSCAN_API_TOKEN }}  # Free token recommended for full vuln DB
+          WPSCAN_API_TOKEN: ${{ secrets.WPSCAN_API_TOKEN }}
         run: |
           CMD="docker run --rm -v /tmp:/tmp wpscanteam/wpscan:latest \
             --url '${{ inputs.target_url }}' \
-            --api-token '$WPSCAN_API_TOKEN' \
             ${{ inputs.extra_flags }} \
             --format ${{ inputs.output_format }} \
             --output /tmp/wpscan-report.${{ inputs.output_format == 'json' && 'json' || 'txt' }} \
             --no-banner"
+
+          if [ -n "$WPSCAN_API_TOKEN" ]; then
+            CMD="$CMD --api-token '$WPSCAN_API_TOKEN'"
+          fi
 
           if [ "${{ inputs.enable_bruteforce }}" = "true" ]; then
             CMD="$CMD --passwords /tmp/passwords.txt ${{ inputs.brute_force_flags }}"
@@ -66,7 +60,6 @@ jobs:
           echo "Running WPScan command:"
           echo "$CMD"
           eval $CMD
-
       - name: Upload Scan Report
         if: always()
         uses: actions/upload-artifact@v4
